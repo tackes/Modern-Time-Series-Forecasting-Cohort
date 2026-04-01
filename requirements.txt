@@ -1,0 +1,82 @@
+# =============================================================================
+# requirements.txt — Packt Workshop: Modern Time Series Forecasting
+# =============================================================================
+# Tested Python Versions: 3.12 (recommended), 3.13
+# Primary Execution Target: Google Colab (CPU)
+# Secondary Targets: Windows 11, macOS, Linux
+#
+# ⚠️  WINDOWS USERS: DO NOT run pip install -r requirements.txt directly.
+#    Follow the conda-based setup in the README instead.
+#    Mixing conda and pip packages causes OpenMP conflicts that crash kernels.
+#
+# This file is used for:
+#   - Google Colab (pip install works cleanly on Linux)
+#   - macOS / Linux local installs
+#   - The pip-only portion of the Windows conda setup
+#
+# For Windows, only install this file AFTER the conda step in the README.
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# Core Data Stack
+# Windows: installed via conda-forge, not this file
+# Colab/macOS/Linux: installed via this file
+# -----------------------------------------------------------------------------
+pandas
+numpy
+pyarrow
+
+
+# -----------------------------------------------------------------------------
+# Plotting
+# matplotlib only — no Plotly, no Bokeh
+# -----------------------------------------------------------------------------
+matplotlib
+
+
+# -----------------------------------------------------------------------------
+# Forecasting — Nixtla Stack
+# Pure Python — safe to install via pip on all platforms
+# -----------------------------------------------------------------------------
+statsforecast
+mlforecast
+neuralforecast
+
+# -----------------------------------------------------------------------------
+# Foundation Model Benchmark
+# -----------------------------------------------------------------------------
+chronos-forecasting
+
+# -----------------------------------------------------------------------------
+# ML Model Backend
+# Windows: lightgbm and scikit-learn installed via conda-forge, not this file
+# Colab/macOS/Linux: installed via this file
+# -----------------------------------------------------------------------------
+lightgbm
+scikit-learn
+
+
+# -----------------------------------------------------------------------------
+# Deep Learning Backend
+# Windows: pytorch installed via conda-forge, not this file
+# Colab/macOS/Linux: install torch first via index URL, then this file:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+#   pip install -r requirements.txt
+# pytorch-lightning is safe to install via pip on all platforms
+# -----------------------------------------------------------------------------
+pytorch-lightning
+
+
+# -----------------------------------------------------------------------------
+# Notebook Environment
+# -----------------------------------------------------------------------------
+jupyter
+ipywidgets
+tqdm
+
+
+# -----------------------------------------------------------------------------
+# Utilities
+# -----------------------------------------------------------------------------
+requests

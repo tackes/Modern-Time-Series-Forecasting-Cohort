@@ -1,0 +1,15 @@
+{
+  "_comment": "CPU-safe NHITS config. Tested target: < 90s on Colab CPU for MICRO_SUBSET_N=50 series.",
+  "_optimization_note": "max_steps is the primary runtime lever. Reduce to 200 if 90s ceiling is tight. Do not increase above 500 without re-testing on target hardware.",
+  "h": 28,
+  "input_size": 56,
+  "max_steps": 300,
+  "val_check_steps": 50,
+  "early_stop_patience_steps": 5,
+  "n_freq_downsample": [2, 1, 1],
+  "learning_rate": 0.001,
+  "batch_size": 32,
+  "random_seed": 42,
+  "enable_progress_bar": false,
+  "enable_model_summary": false
+}
