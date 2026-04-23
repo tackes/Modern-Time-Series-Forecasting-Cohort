@@ -56,6 +56,22 @@ def pooled_wmape(y_true: np.ndarray, y_hat: np.ndarray) -> float:
     return float(np.sum(np.abs(y_true - y_hat)) / denom)
 
 
+def pooled_bias(y_true: np.ndarray, y_hat: np.ndarray) -> float:
+    """
+    Pooled forecast bias: sum(y_hat - y) / sum(y).
+    Positive = systematic over-forecast. Negative = systematic under-forecast.
+    Returns NaN if all actuals are zero.
+    """
+    y_true = np.asarray(y_true, dtype=float)
+    y_hat  = np.asarray(y_hat,  dtype=float)
+
+    denom = np.sum(y_true)
+    if denom == 0:
+        return float("nan")
+
+    return float(np.sum(y_hat - y_true) / denom)
+
+
 def pooled_interval_score(
     y_true: np.ndarray,
     lo: np.ndarray,
@@ -144,11 +160,19 @@ def score_forecasts(
         y_hat = group["y_hat"].values
         inferred_stage = group["stage"].iloc[0] if "stage" in group.columns else "unknown"
 
-        # Point metric
+        # Point metrics
         records.append({
             "model":             model_name,
             "metric":            "wMAPE",
             "score":             pooled_wmape(y_true, y_hat),
+            "stage":             inferred_stage,
+            "aggregation_scope": "pooled_all_windows",
+            "subset_name":       subset_name,
+        })
+        records.append({
+            "model":             model_name,
+            "metric":            "Bias",
+            "score":             pooled_bias(y_true, y_hat),
             "stage":             inferred_stage,
             "aggregation_scope": "pooled_all_windows",
             "subset_name":       subset_name,

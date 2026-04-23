@@ -58,6 +58,7 @@ from config import (
     REFIT,
     RANDOM_SEED,
     INTERVAL_COVERAGE,
+    USE_TUNED_PARAMS,
 )
 from src.schemas import validate_forecast, validate_score, validate_panel
 from src.evaluation import score_forecasts, build_leaderboard
@@ -329,30 +330,70 @@ def run_ml(panel: pd.DataFrame) -> pd.DataFrame:
     """
     Run LightGBM via MLForecast with autoregressive lag features.
 
-    # TODO: Implement after confirming lag window config with workshop authors.
-    #
-    # Implementation notes:
-    # - MLForecast(models=[lgb.LGBMRegressor(...)], freq='D',
-    #              lags=[7, 14, 21, 28], lag_transforms={...},
-    #              date_features=['dayofweek', 'month'])
-    # - Load params from params/mlforecast_lgb_tuned.json if USE_TUNED_PARAMS.
-    # - Use cross_validation(df=panel, h=HORIZON, n_windows=N_WINDOWS,
-    #                         step_size=STEP_SIZE, refit=REFIT)
-    # - Conformal prediction intervals:
-    #     Compute residuals per window; derive empirical 10th/90th percentile bands.
-    #     Add lo_80, hi_80 columns before saving.
-    # - Save artifacts/05_ml_forecasts.parquet
-    # - Add 'stage' = 'ml'.
+    Returns a forecast DataFrame conforming to the forecast schema with columns:
+    [unique_id, ds, y, model, y_hat, lo_80, hi_80, cutoff, stage]
     """
-    log.info("ML stage: SCAFFOLDED — see TODO in run_ml()")
-    _save_placeholder_forecast(
-        path=ARTIFACT_DIR / "05_ml_forecasts.parquet",
-        model_names=["LightGBM"],
-        panel=panel,
-        stage="ml",
-        label="05_ml_forecasts (placeholder)",
+    import json as _json
+    import lightgbm as lgb
+    from mlforecast import MLForecast
+    from mlforecast.lag_transforms import RollingMean
+
+    params_file = PARAMS_DIR / ("mlforecast_lgb_tuned.json" if USE_TUNED_PARAMS
+                                else "mlforecast_lgb_default.json")
+    with open(params_file) as f:
+        lgb_params = _json.load(f)
+    lgb_params = {k: v for k, v in lgb_params.items() if not k.startswith("_")}
+    lgb_params["random_state"] = RANDOM_SEED
+
+    log.info("Running LightGBM via MLForecast on full workshop subset ...")
+    log.info(f"  Panel  : {panel['unique_id'].nunique():,} series, {len(panel):,} rows")
+    log.info(f"  Params : {params_file.name}")
+
+    mlf = MLForecast(
+        models=[lgb.LGBMRegressor(**lgb_params)],
+        freq="D",
+        lags=[7, 14, 28],
+        lag_transforms={7: [RollingMean(window_size=28)]},
+        date_features=["dayofweek", "month"],
     )
-    return pd.read_parquet(ARTIFACT_DIR / "05_ml_forecasts.parquet")
+
+    cv = mlf.cross_validation(
+        df=panel,
+        h=HORIZON,
+        n_windows=N_WINDOWS,
+        step_size=STEP_SIZE,
+        refit=REFIT,
+    )
+    log.info(f"  CV complete. Shape: {cv.shape}")
+
+    # Reshape wide → long
+    cv = cv.reset_index()
+    meta_cols  = ["unique_id", "ds", "cutoff", "y", "index"]
+    model_cols = [c for c in cv.columns if c not in meta_cols]
+
+    records = []
+    for model_name in model_cols:
+        chunk = cv[["unique_id", "ds", "cutoff", "y", model_name]].copy()
+        chunk = chunk.rename(columns={model_name: "y_hat"})
+        chunk["model"] = "LightGBM"
+        chunk["stage"] = "ml"
+        chunk["y_hat"] = chunk["y_hat"].fillna(0).clip(lower=0)
+
+        # Conformal intervals from in-sample residuals
+        residuals  = chunk["y"] - chunk["y_hat"]
+        lo_offset  = np.percentile(residuals, 10)
+        hi_offset  = np.percentile(residuals, 90)
+        chunk["lo_80"] = (chunk["y_hat"] + lo_offset).clip(lower=0)
+        chunk["hi_80"] = (chunk["y_hat"] + hi_offset).clip(lower=0)
+
+        records.append(chunk)
+
+    forecasts_df = pd.concat(records, ignore_index=True)
+    forecasts_df = validate_forecast(forecasts_df, artifact_name="05_ml_forecasts")
+    _save_parquet(forecasts_df, ARTIFACT_DIR / "05_ml_forecasts.parquet", "05_ml_forecasts")
+
+    log.info(f"  LightGBM complete: {len(forecasts_df):,} rows")
+    return forecasts_df
 
 
 # ---------------------------------------------------------------------------
@@ -361,35 +402,70 @@ def run_ml(panel: pd.DataFrame) -> pd.DataFrame:
 
 def run_dl(panel: pd.DataFrame) -> pd.DataFrame:
     """
-    Run NHITS via NeuralForecast.
+    Run NHITS via NeuralForecast on the full workshop subset.
 
-    # TODO: Implement after confirming max_steps, val_check_steps, and
-    #       early_stop_patience that reliably clear 90s on a Colab CPU.
-    #
-    # Implementation notes (known-safe starting point for offline testing):
-    #   NHITS(h=HORIZON,
-    #         input_size=2*HORIZON,
-    #         max_steps=500,
-    #         val_check_steps=50,
-    #         early_stop_patience_steps=5,
-    #         n_freq_downsample=[2, 1, 1])
-    # - Load params from params/nhits_tuned.json if USE_TUNED_PARAMS.
-    # - Use NeuralForecast.cross_validation() — same window/step logic.
-    # - NHITS does not natively produce intervals.
-    #   Options: (a) use conformal wrappers, (b) load precomputed interval artifact
-    #   generated separately on GPU. Decision deferred.
-    # - Add 'stage' = 'dl'.
-    # - Save artifacts/06_dl_forecasts.parquet
+    Returns a forecast DataFrame conforming to the forecast schema with columns:
+    [unique_id, ds, y, model, y_hat, lo_80, hi_80, cutoff, stage]
     """
-    log.info("DL stage: SCAFFOLDED — see TODO in run_dl()")
-    _save_placeholder_forecast(
-        path=ARTIFACT_DIR / "06_dl_forecasts.parquet",
-        model_names=["NHITS"],
-        panel=panel,
-        stage="dl",
-        label="06_dl_forecasts (placeholder)",
+    import os as _os
+    import json as _json
+    _os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
+    from neuralforecast import NeuralForecast
+    from neuralforecast.models import NHITS
+
+    params_path = PARAMS_DIR / "nhits_tuned.json"
+    with open(params_path) as f:
+        nhits_params = _json.load(f)
+    nhits_params = {k: v for k, v in nhits_params.items() if not k.startswith("_")}
+    nhits_params["random_seed"] = RANDOM_SEED
+    nhits_params["h"] = HORIZON
+    nhits_params["early_stop_patience_steps"] = -1  # Disable — no val_size in offline run
+
+    log.info("Running NHITS via NeuralForecast on full workshop subset ...")
+    log.info(f"  Panel     : {panel['unique_id'].nunique():,} series, {len(panel):,} rows")
+    log.info(f"  max_steps : {nhits_params['max_steps']}")
+
+    nhits_model = NHITS(**nhits_params)
+    nf = NeuralForecast(models=[nhits_model], freq="D")
+
+    cv = nf.cross_validation(
+        df=panel,
+        n_windows=N_WINDOWS,
+        step_size=STEP_SIZE,
+        refit=REFIT,
+        val_size=HORIZON,
     )
-    return pd.read_parquet(ARTIFACT_DIR / "06_dl_forecasts.parquet")
+    log.info(f"  CV complete. Shape: {cv.shape}")
+
+    # Reshape wide → long
+    cv = cv.reset_index()
+    meta_cols  = ["unique_id", "ds", "cutoff", "y", "index"]
+    model_cols = [c for c in cv.columns if c not in meta_cols]
+
+    records = []
+    for model_name in model_cols:
+        chunk = cv[["unique_id", "ds", "cutoff", "y", model_name]].copy()
+        chunk = chunk.rename(columns={model_name: "y_hat"})
+        chunk["model"] = "NHITS"
+        chunk["stage"] = "dl"
+        chunk["y_hat"] = chunk["y_hat"].fillna(0).clip(lower=0)
+
+        # Conformal intervals from in-sample residuals
+        residuals = chunk["y"] - chunk["y_hat"]
+        lo_offset = np.percentile(residuals, 10)
+        hi_offset = np.percentile(residuals, 90)
+        chunk["lo_80"] = (chunk["y_hat"] + lo_offset).clip(lower=0)
+        chunk["hi_80"] = (chunk["y_hat"] + hi_offset).clip(lower=0)
+
+        records.append(chunk)
+
+    forecasts_df = pd.concat(records, ignore_index=True)
+    forecasts_df = validate_forecast(forecasts_df, artifact_name="06_dl_forecasts")
+    _save_parquet(forecasts_df, ARTIFACT_DIR / "06_dl_forecasts.parquet", "06_dl_forecasts")
+
+    log.info(f"  NHITS complete: {len(forecasts_df):,} rows")
+    return forecasts_df
 
 
 # ---------------------------------------------------------------------------
