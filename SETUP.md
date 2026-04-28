@@ -12,65 +12,67 @@ This guide walks you through every step to get your environment ready before the
 
 | My situation | My path |
 |---|---|
-| I don't want to install anything | [Path A: Google Colab](#path-a-google-colab-recommended-for-most-students) ← recommended |
-| I'm on Windows with Anaconda/Miniconda | [Path B: Windows Local](#path-b-windows-local-requires-anaconda-or-miniconda) |
-| I'm on Mac or Linux | [Path C: Mac / Linux Local](#path-c-mac--linux-local) |
+| I'm on Windows | [Path B: Windows Local (VS Code + Conda)](#path-b-windows-local-requires-anaconda-or-miniconda) ← recommended |
+| I'm on Mac or Linux | [Path C: Mac / Linux Local (VS Code)](#path-c-mac--linux-local) ← recommended |
+| I can't install software on my machine | [Path A: Google Colab](#path-a-google-colab-fallback-only) |
 
-**If you're not sure, use Path A (Google Colab).** It requires no installation, works the same for everyone.
+**We recommend VS Code local (Path B or C) over Google Colab.** Once your environment is set up, VS Code is faster, more reliable, and closer to how real forecasting work is done. You open a notebook, pick your kernel once, and everything just works — no re-installing packages every session.
+
+**Use Colab (Path A) only if you cannot install software on your machine** — e.g., a locked-down work laptop. It works, but requires re-running a setup cell at the start of every session.
 
 ---
 
-## Path A: Google Colab (Recommended for most students)
+## Path A: Google Colab (Fallback Only)
 
 Google Colab runs entirely in your browser. You do not need to install Python, Git, or anything else on your computer.
 
 **What you need:** A Google account (Gmail works).
 
+> **Important — Colab sessions are temporary.** When you close your browser or the session times out, Colab resets completely. All installed packages and cloned files are gone. You must run the setup cell (A.3) at the start of **every** new Colab session, including on workshop day. It takes about 5 minutes and is the same every time.
+
 ---
 
-### A.1 — Open Google Colab
+### A.1 — Open the Environment Check Notebook from GitHub
+
+Notebooks in Colab are opened directly from GitHub — not by cloning first and then navigating.
 
 1. Open your browser and go to **https://colab.research.google.com**
 2. Sign in with your Google account if prompted.
-3. You will see the Colab welcome screen. Leave it open.
+3. A dialog box appears titled **"Open notebook"**. If it does not appear, click **File → Open notebook** in the top menu.
+4. Click the **GitHub** tab at the top of the dialog.
+5. In the search box, paste:
+   ```
+   tackes/Modern-Time-Series-Forecasting-Cohort
+   ```
+   and press **Enter**.
+6. A list of notebooks appears. Click **`00_env_check.ipynb`**.
+7. The notebook opens in a new tab.
+
+> **On workshop day**, use this same method to open each session's notebook (e.g., `student_notebooks/02_framing_and_config.ipynb`). You will do this for each notebook during the session.
 
 ---
 
-### A.2 — Open a New Notebook and Clone the Repo
+### A.2 — Understand the Setup Cell
 
-1. In Colab, click **File** in the top-left menu bar.
-2. Click **New notebook**.
-3. A new tab opens with an empty notebook. You will see a code cell with a blinking cursor.
-4. Click inside that cell and type the following lines exactly. Press **Enter** after each line (not Shift+Enter — just Enter to go to a new line within the cell):
+The first code cell in every notebook is a setup cell. It clones the repository (which brings the data and precomputed artifacts) and installs all packages. It looks like this:
 
-```
+```python
 !git clone https://github.com/tackes/Modern-Time-Series-Forecasting-Cohort.git packt-modern-time-series
 %cd packt-modern-time-series
-```
-
-5. Press **Shift + Enter** to run the cell.
-6. You will see output like:
-   ```
-   Cloning into 'packt-modern-time-series'...
-   remote: Counting objects: ...
-   /content/packt-modern-time-series
-   ```
-   This means the repository downloaded successfully.
-
----
-
-### A.3 — Install the Dependencies
-
-1. Click the **+Code** button below your current cell to add a new cell.
-2. Paste in the following and press **Shift + Enter**:
-
-```
 !pip install -q torch --index-url https://download.pytorch.org/whl/cpu
 !pip install -q -r requirements.txt
 ```
 
-3. This will take **3–5 minutes**. You will see a lot of text scrolling. This is normal.
-4. When it finishes, the last visible line will say something like `Successfully installed ...`. You will NOT see any red `ERROR` lines if everything went well.
+**You must run this cell every time you open a notebook in a new Colab session.** The clone brings all the data and artifact files — you do not need to upload anything separately.
+
+---
+
+### A.3 — Run the Setup Cell
+
+1. Click inside the first code cell of `00_env_check.ipynb`.
+2. Press **Shift + Enter** to run it.
+3. You will see a lot of text scroll by. This is normal and takes **3–5 minutes**.
+4. When it finishes, you will see `Successfully installed ...` near the bottom. There should be no red `ERROR` lines.
 
 > **If you see a red error line** mentioning a package name and "failed to install", copy the full error text and check TROUBLESHOOTING.md.
 
@@ -78,12 +80,10 @@ Google Colab runs entirely in your browser. You do not need to install Python, G
 
 ### A.4 — Run the Environment Check
 
-1. In the file panel on the left, navigate to `packt-modern-time-series`.
-2. Double-click `00_env_check.ipynb`.
-3. A new tab opens with the environment check notebook.
-4. Click **Runtime** in the top menu, then click **Run all**.
-5. Wait for all cells to finish (about 30–60 seconds).
-6. Scroll to the bottom of the notebook. You should see something like:
+1. Once the setup cell finishes, click **Runtime** in the top menu.
+2. Click **Run all**.
+3. Wait for all cells to finish (about 30–60 seconds).
+4. Scroll to the bottom of the notebook. You should see something like:
 
 ```
 ✓ Python version OK
