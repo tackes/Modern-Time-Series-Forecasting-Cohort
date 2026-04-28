@@ -65,6 +65,7 @@ INTERVAL_COVERAGE = 0.80    # 80% prediction interval — used consistently acro
 # ---------------------------------------------------------------------------
 TUNE_MODELS = False         # If True, run hyperparameter search (take-home only)
 USE_TUNED_PARAMS = True     # If True, load from params/ instead of using defaults
+USE_INTERVALS = True        # If True, compute conformal prediction intervals (requires refit=True)
 
 # ---------------------------------------------------------------------------
 # M5 Source (Offline Use Only — never referenced in live notebooks)
@@ -97,6 +98,7 @@ ARTIFACT_REGISTRY = {
 
     # Module 05
     "05_ml_forecasts":             ARTIFACT_DIR / "05_ml_forecasts.parquet",
+    "05_ml_rich_forecasts":        ARTIFACT_DIR / "05_ml_rich_forecasts.parquet",
 
     # Module 06
     "06_dl_forecasts":             ARTIFACT_DIR / "06_dl_forecasts.parquet",
@@ -117,6 +119,7 @@ ARTIFACT_SCHEMA_MAP = {
     "04_baseline_forecasts":       "forecast",
     "04_baseline_cv_scores":       "score",
     "05_ml_forecasts":             "forecast",
+    "05_ml_rich_forecasts":        "forecast",
     "06_dl_forecasts":             "forecast",
     "07_uncertainty_leaderboard":  "score",
     "08_final_master_leaderboard": "score",

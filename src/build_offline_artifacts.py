@@ -9,14 +9,15 @@ Prerequisites:
     2. data/m5_workshop_subset.parquet must exist.
 
 Run from the project root:
-    python src/build_offline_artifacts.py [--stages all|chronos|baselines|ml|dl]
+    python src/build_offline_artifacts.py [--stages all|chronos|baselines|ml|ml_rich|dl]
 
 Stages
 ------
-chronos   : Fully implemented. Runs amazon/chronos-t5-mini on WORKSHOP_SUBSET_N.
-baselines : Scaffolded (TODO). Naive, SeasonalNaive, AutoETS via StatsForecast.
-ml        : Scaffolded (TODO). LightGBM via MLForecast.
-dl        : Scaffolded (TODO). NHITS via NeuralForecast.
+chronos   : Runs amazon/chronos-t5-mini on WORKSHOP_SUBSET_N.
+baselines : Naive, SeasonalNaive, AutoETS via StatsForecast.
+ml        : LightGBM via MLForecast with PredictionIntervals (baseline feature set).
+ml_rich   : LightGBM via MLForecast with extended feature set (rolling stats + Fourier).
+dl        : NHITS via NeuralForecast with NFPredictionIntervals.
 all       : Runs all stages in order (default).
 
 Offline dependencies (not in requirements.txt — install on offline build machine):
@@ -28,6 +29,7 @@ Output artifacts:
     artifacts/04_baseline_forecasts.parquet
     artifacts/04_baseline_cv_scores.parquet
     artifacts/05_ml_forecasts.parquet
+    artifacts/05_ml_rich_forecasts.parquet
     artifacts/06_dl_forecasts.parquet
     artifacts/07_uncertainty_leaderboard.parquet
     artifacts/08_final_master_leaderboard.csv
@@ -357,35 +359,36 @@ def run_ml(panel: pd.DataFrame) -> pd.DataFrame:
         date_features=["dayofweek", "month"],
     )
 
+    from mlforecast.utils import PredictionIntervals
+
     cv = mlf.cross_validation(
         df=panel,
         h=HORIZON,
         n_windows=N_WINDOWS,
         step_size=STEP_SIZE,
-        refit=REFIT,
+        refit=True,  # PredictionIntervals requires refit=True — not supported in transfer-learning mode
+        prediction_intervals=PredictionIntervals(n_windows=N_WINDOWS, h=HORIZON),
+        level=[80],
     )
     log.info(f"  CV complete. Shape: {cv.shape}")
 
     # Reshape wide → long
     cv = cv.reset_index()
     meta_cols  = ["unique_id", "ds", "cutoff", "y", "index"]
-    model_cols = [c for c in cv.columns if c not in meta_cols]
+    model_cols = [c for c in cv.columns
+                  if c not in meta_cols and not any(x in c for x in ["-lo-", "-hi-"])]
 
     records = []
     for model_name in model_cols:
+        lo_col = f"{model_name}-lo-80"
+        hi_col = f"{model_name}-hi-80"
         chunk = cv[["unique_id", "ds", "cutoff", "y", model_name]].copy()
         chunk = chunk.rename(columns={model_name: "y_hat"})
         chunk["model"] = "LightGBM"
         chunk["stage"] = "ml"
         chunk["y_hat"] = chunk["y_hat"].fillna(0).clip(lower=0)
-
-        # Conformal intervals from in-sample residuals
-        residuals  = chunk["y"] - chunk["y_hat"]
-        lo_offset  = np.percentile(residuals, 10)
-        hi_offset  = np.percentile(residuals, 90)
-        chunk["lo_80"] = (chunk["y_hat"] + lo_offset).clip(lower=0)
-        chunk["hi_80"] = (chunk["y_hat"] + hi_offset).clip(lower=0)
-
+        chunk["lo_80"] = cv[lo_col].fillna(0).clip(lower=0).values if lo_col in cv.columns else chunk["y_hat"]
+        chunk["hi_80"] = cv[hi_col].fillna(0).clip(lower=0).values if hi_col in cv.columns else chunk["y_hat"]
         records.append(chunk)
 
     forecasts_df = pd.concat(records, ignore_index=True)
@@ -393,6 +396,128 @@ def run_ml(panel: pd.DataFrame) -> pd.DataFrame:
     _save_parquet(forecasts_df, ARTIFACT_DIR / "05_ml_forecasts.parquet", "05_ml_forecasts")
 
     log.info(f"  LightGBM complete: {len(forecasts_df):,} rows")
+    return forecasts_df
+
+
+# ---------------------------------------------------------------------------
+# Stage 3b: ML Rich — LightGBM with extended feature set
+# ---------------------------------------------------------------------------
+
+def run_ml_rich(panel: pd.DataFrame) -> pd.DataFrame:
+    """
+    Run LightGBM via MLForecast with the extended feature set from Module 5 section 5.5b.
+    Saves to 05_ml_rich_forecasts.parquet.
+
+    Feature set:
+        lags             : [7, 14, 21, 28]
+        lag_7 transforms : RollingMean, RollingStd, RollingMin, RollingMax,
+                           RollingQuantile(Q25), RollingQuantile(Q75),
+                           SeasonalRollingMean(4-week), SeasonalRollingMean(8-week)
+        lag_14 transforms: RollingMean(28)
+        date_features    : month, Fourier weekly k=2, Fourier annual k=1
+
+    Returns a forecast DataFrame conforming to the forecast schema.
+    """
+    import json as _json
+    import numpy as np
+    import lightgbm as lgb
+    from mlforecast import MLForecast
+    from mlforecast.lag_transforms import (
+        RollingMean, RollingStd, RollingMin, RollingMax,
+        RollingQuantile, SeasonalRollingMean,
+    )
+    from mlforecast.utils import PredictionIntervals
+
+    params_file = PARAMS_DIR / ("mlforecast_lgb_tuned.json" if USE_TUNED_PARAMS
+                                else "mlforecast_lgb_default.json")
+    with open(params_file) as f:
+        lgb_params = _json.load(f)
+    lgb_params = {k: v for k, v in lgb_params.items() if not k.startswith("_")}
+    lgb_params["random_state"] = RANDOM_SEED
+
+    log.info("Running LightGBM-Rich via MLForecast on full workshop subset ...")
+    log.info(f"  Panel  : {panel['unique_id'].nunique():,} series, {len(panel):,} rows")
+    log.info(f"  Params : {params_file.name}")
+
+    def fourier_sin1_weekly(dates):
+        return np.sin(2 * np.pi * 1 * dates.dayofweek / 7)
+
+    def fourier_cos1_weekly(dates):
+        return np.cos(2 * np.pi * 1 * dates.dayofweek / 7)
+
+    def fourier_sin2_weekly(dates):
+        return np.sin(2 * np.pi * 2 * dates.dayofweek / 7)
+
+    def fourier_cos2_weekly(dates):
+        return np.cos(2 * np.pi * 2 * dates.dayofweek / 7)
+
+    def fourier_sin1_annual(dates):
+        return np.sin(2 * np.pi * 1 * dates.dayofyear / 365.25)
+
+    def fourier_cos1_annual(dates):
+        return np.cos(2 * np.pi * 1 * dates.dayofyear / 365.25)
+
+    mlf = MLForecast(
+        models=[lgb.LGBMRegressor(**lgb_params)],
+        freq="D",
+        lags=[7, 14, 21, 28],
+        lag_transforms={
+            7: [
+                RollingMean(window_size=28),
+                RollingStd(window_size=28),
+                RollingMin(window_size=28),
+                RollingMax(window_size=28),
+                RollingQuantile(p=0.25, window_size=28),
+                RollingQuantile(p=0.75, window_size=28),
+                SeasonalRollingMean(season_length=7, window_size=4),
+                SeasonalRollingMean(season_length=7, window_size=8),
+            ],
+            14: [RollingMean(window_size=28)],
+        },
+        date_features=[
+            "month",
+            fourier_sin1_weekly, fourier_cos1_weekly,
+            fourier_sin2_weekly, fourier_cos2_weekly,
+            fourier_sin1_annual, fourier_cos1_annual,
+        ],
+    )
+
+    cv = mlf.cross_validation(
+        df=panel,
+        h=HORIZON,
+        n_windows=N_WINDOWS,
+        step_size=STEP_SIZE,
+        refit=True,
+        prediction_intervals=PredictionIntervals(n_windows=N_WINDOWS, h=HORIZON),
+        level=[80],
+    )
+    log.info(f"  CV complete. Shape: {cv.shape}")
+
+    # Reshape wide → long
+    cv = cv.reset_index()
+    meta_cols  = ["unique_id", "ds", "cutoff", "y", "index"]
+    model_cols = [c for c in cv.columns
+                  if c not in meta_cols and not any(x in c for x in ["-lo-", "-hi-"])]
+
+    records = []
+    for model_name in model_cols:
+        lo_col = f"{model_name}-lo-80"
+        hi_col = f"{model_name}-hi-80"
+        chunk = cv[["unique_id", "ds", "cutoff", "y", model_name]].copy()
+        chunk = chunk.rename(columns={model_name: "y_hat"})
+        chunk["model"] = "LightGBM-Rich"
+        chunk["stage"] = "ml"
+        chunk["y_hat"] = chunk["y_hat"].fillna(0).clip(lower=0)
+        chunk["lo_80"] = cv[lo_col].fillna(0).clip(lower=0).values if lo_col in cv.columns else chunk["y_hat"]
+        chunk["hi_80"] = cv[hi_col].fillna(0).clip(lower=0).values if hi_col in cv.columns else chunk["y_hat"]
+        records.append(chunk)
+
+    forecasts_df = pd.concat(records, ignore_index=True)
+    forecasts_df = validate_forecast(forecasts_df, artifact_name="05_ml_rich_forecasts")
+    _save_parquet(forecasts_df, ARTIFACT_DIR / "05_ml_rich_forecasts.parquet",
+                  "05_ml_rich_forecasts")
+
+    log.info(f"  LightGBM-Rich complete: {len(forecasts_df):,} rows")
     return forecasts_df
 
 
@@ -429,35 +554,36 @@ def run_dl(panel: pd.DataFrame) -> pd.DataFrame:
     nhits_model = NHITS(**nhits_params)
     nf = NeuralForecast(models=[nhits_model], freq="D")
 
+    from neuralforecast.utils import PredictionIntervals as NFPredictionIntervals
+
     cv = nf.cross_validation(
         df=panel,
         n_windows=N_WINDOWS,
         step_size=STEP_SIZE,
-        refit=REFIT,
+        refit=True,  # NFPredictionIntervals requires refit=True
         val_size=HORIZON,
+        prediction_intervals=NFPredictionIntervals(n_windows=N_WINDOWS, method="conformal_distribution"),
+        level=[80],
     )
     log.info(f"  CV complete. Shape: {cv.shape}")
 
     # Reshape wide → long
     cv = cv.reset_index()
     meta_cols  = ["unique_id", "ds", "cutoff", "y", "index"]
-    model_cols = [c for c in cv.columns if c not in meta_cols]
+    model_cols = [c for c in cv.columns
+                  if c not in meta_cols and not any(x in c for x in ["-lo-", "-hi-"])]
 
     records = []
     for model_name in model_cols:
+        lo_col = f"{model_name}-lo-80"
+        hi_col = f"{model_name}-hi-80"
         chunk = cv[["unique_id", "ds", "cutoff", "y", model_name]].copy()
         chunk = chunk.rename(columns={model_name: "y_hat"})
         chunk["model"] = "NHITS"
         chunk["stage"] = "dl"
         chunk["y_hat"] = chunk["y_hat"].fillna(0).clip(lower=0)
-
-        # Conformal intervals from in-sample residuals
-        residuals = chunk["y"] - chunk["y_hat"]
-        lo_offset = np.percentile(residuals, 10)
-        hi_offset = np.percentile(residuals, 90)
-        chunk["lo_80"] = (chunk["y_hat"] + lo_offset).clip(lower=0)
-        chunk["hi_80"] = (chunk["y_hat"] + hi_offset).clip(lower=0)
-
+        chunk["lo_80"] = cv[lo_col].fillna(0).clip(lower=0).values if lo_col in cv.columns else chunk["y_hat"]
+        chunk["hi_80"] = cv[hi_col].fillna(0).clip(lower=0).values if hi_col in cv.columns else chunk["y_hat"]
         records.append(chunk)
 
     forecasts_df = pd.concat(records, ignore_index=True)
@@ -512,82 +638,6 @@ def build_final_artifacts(
 
 
 # ---------------------------------------------------------------------------
-# Placeholder Generators (used by scaffolded stages)
-# ---------------------------------------------------------------------------
-
-def _save_placeholder_forecast(
-    path: Path,
-    model_names: list[str],
-    panel: pd.DataFrame,
-    stage: str,
-    label: str,
-) -> None:
-    """
-    Write a schema-valid placeholder forecast artifact with zero y_hat values.
-    Ensures downstream stages (uncertainty leaderboard, final leaderboard)
-    can run without errors even before real model runs are complete.
-    """
-    end_date = panel["ds"].max()
-    cutoffs = [
-        end_date - pd.Timedelta(days=(N_WINDOWS - i) * STEP_SIZE)
-        for i in range(N_WINDOWS)
-    ]
-
-    # Use a small subset for placeholder generation speed
-    sample_ids = panel["unique_id"].unique()[:min(10, len(panel["unique_id"].unique()))]
-
-    records = []
-    for model in model_names:
-        for cutoff in cutoffs:
-            forecast_start = cutoff + pd.Timedelta(days=1)
-            forecast_dates = pd.date_range(start=forecast_start, periods=HORIZON, freq="D")
-            for uid in sample_ids:
-                actuals = panel[
-                    (panel["unique_id"] == uid) &
-                    (panel["ds"].isin(forecast_dates))
-                ][["ds", "y"]]
-                for _, row in actuals.iterrows():
-                    records.append({
-                        "unique_id": uid,
-                        "ds":        row["ds"],
-                        "y":         float(row["y"]),
-                        "model":     model,
-                        "y_hat":     0.0,  # Placeholder
-                        "lo_80":     0.0,
-                        "hi_80":     0.0,
-                        "cutoff":    cutoff,
-                        "stage":     stage,
-                    })
-
-    df = pd.DataFrame(records)
-    df = validate_forecast(df, artifact_name=label)
-    _save_parquet(df, path, label)
-
-
-def _save_placeholder_scores(
-    path: Path,
-    model_names: list[str],
-    stage: str,
-    label: str,
-) -> None:
-    """Write a schema-valid placeholder score artifact."""
-    records = []
-    for model in model_names:
-        for metric in ["wMAPE", "IntervalScore_80", "Coverage_80"]:
-            records.append({
-                "model":             model,
-                "metric":            metric,
-                "score":             0.0,  # Placeholder
-                "stage":             stage,
-                "aggregation_scope": "pooled_all_windows",
-                "subset_name":       f"workshop_{WORKSHOP_SUBSET_N}",
-            })
-    df = pd.DataFrame(records)
-    df = validate_score(df, artifact_name=label)
-    _save_parquet(df, path, label)
-
-
-# ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
 
@@ -595,6 +645,7 @@ STAGE_MAP = {
     "chronos":   run_chronos,
     "baselines": run_baselines,
     "ml":        run_ml,
+    "ml_rich":   run_ml_rich,
     "dl":        run_dl,
 }
 
@@ -607,11 +658,12 @@ def main(stages: list[str]) -> None:
 
     panel = _load_panel()
 
-    chronos_df    = None
-    baselines_df  = None
+    chronos_df         = None
+    baselines_df       = None
     baseline_scores_df = None
-    ml_df         = None
-    dl_df         = None
+    ml_df              = None
+    ml_rich_df         = None
+    dl_df              = None
 
     if "chronos" in stages:
         chronos_df = run_chronos(panel)
@@ -631,6 +683,9 @@ def main(stages: list[str]) -> None:
     if "ml" in stages:
         ml_df = run_ml(panel)
 
+    if "ml_rich" in stages:
+        ml_rich_df = run_ml_rich(panel)
+
     if "dl" in stages:
         dl_df = run_dl(panel)
 
@@ -648,7 +703,7 @@ if __name__ == "__main__":
         "--stages",
         nargs="+",
         default=["all"],
-        choices=["all", "chronos", "baselines", "ml", "dl"],
+        choices=["all", "chronos", "baselines", "ml", "ml_rich", "dl"],
         help="Which stages to run. Default: all.",
     )
     args = parser.parse_args()
