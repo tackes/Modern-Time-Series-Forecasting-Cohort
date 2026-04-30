@@ -9,7 +9,7 @@ Prerequisites:
     2. data/m5_workshop_subset.parquet must exist.
 
 Run from the project root:
-    python src/build_offline_artifacts.py [--stages all|chronos|baselines|ml|ml_rich|dl]
+    python src/build_offline_artifacts.py [--stages all|chronos|baselines|ml|ml_rich|ml_cat|dl]
 
 Stages
 ------
@@ -17,6 +17,7 @@ chronos   : Runs amazon/chronos-t5-mini on WORKSHOP_SUBSET_N.
 baselines : Naive, SeasonalNaive, AutoETS via StatsForecast.
 ml        : LightGBM via MLForecast with PredictionIntervals (baseline feature set).
 ml_rich   : LightGBM via MLForecast with extended feature set (rolling stats + Fourier).
+ml_cat    : LightGBM via MLForecast with extended features + M5 static categorical features.
 dl        : NHITS via NeuralForecast with NFPredictionIntervals.
 all       : Runs all stages in order (default).
 
@@ -30,6 +31,7 @@ Output artifacts:
     artifacts/04_baseline_cv_scores.parquet
     artifacts/05_ml_forecasts.parquet
     artifacts/05_ml_rich_forecasts.parquet
+    artifacts/05_ml_cat_forecasts.parquet
     artifacts/06_dl_forecasts.parquet
     artifacts/07_uncertainty_leaderboard.parquet
     artifacts/08_final_master_leaderboard.csv
@@ -522,6 +524,143 @@ def run_ml_rich(panel: pd.DataFrame) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# Stage 3c: ML Categorical — LightGBM with extended features + static categoricals
+# ---------------------------------------------------------------------------
+
+def run_ml_categorical(panel: pd.DataFrame) -> pd.DataFrame:
+    """
+    Run LightGBM via MLForecast with the extended feature set from 5.5B
+    PLUS static categorical features extracted from the M5 unique_id hierarchy.
+
+    Categorical features (extracted from unique_id format CATEGORY_DEPTNUM_ITEMNUM_STATE_STORENUM):
+        cat_id   : product category (FOODS, HOBBIES, HOUSEHOLD) — 3 values
+        dept_id  : department (FOODS_1, FOODS_2, HOBBIES_1, ...)  — 7 values
+        state_id : store state (CA, TX, WI) — 3 values
+        store_id : store identifier (CA_1, CA_2, TX_1, ...) — 10 values
+
+    Static features are passed to cross_validation() via the static_features argument.
+    MLForecast attaches them as constant columns to every training row for a given series.
+
+    Saves to 05_ml_cat_forecasts.parquet.
+    Returns a forecast DataFrame conforming to the forecast schema.
+    """
+    import json as _json
+    import numpy as np
+    import lightgbm as lgb
+    from mlforecast import MLForecast
+    from mlforecast.lag_transforms import (
+        RollingMean, RollingStd, RollingMin, RollingMax,
+        RollingQuantile, SeasonalRollingMean,
+    )
+    from mlforecast.utils import PredictionIntervals
+
+    params_file = PARAMS_DIR / ("mlforecast_lgb_tuned.json" if USE_TUNED_PARAMS
+                                else "mlforecast_lgb_default.json")
+    with open(params_file) as f:
+        lgb_params = _json.load(f)
+    lgb_params = {k: v for k, v in lgb_params.items() if not k.startswith("_")}
+    lgb_params["random_state"] = RANDOM_SEED
+
+    log.info("Running LightGBM-Cat via MLForecast on full workshop subset ...")
+    log.info(f"  Panel  : {panel['unique_id'].nunique():,} series, {len(panel):,} rows")
+    log.info(f"  Params : {params_file.name}")
+
+    # ── Extract static categorical features from M5 unique_id ────────────────
+    parts = panel["unique_id"].str.split("_")
+    panel_cat = panel.copy()
+    panel_cat["cat_id"]   = parts.str[0].astype("category").cat.codes
+    panel_cat["dept_id"]  = parts.str[:2].str.join("_").astype("category").cat.codes
+    panel_cat["state_id"] = parts.str[3].astype("category").cat.codes
+    panel_cat["store_id"] = parts.str[3:5].str.join("_").astype("category").cat.codes
+
+    STATIC_FEATURES = ["cat_id", "dept_id", "state_id", "store_id"]
+    log.info(f"  Static features: {STATIC_FEATURES}")
+
+    # ── Fourier date feature callables ────────────────────────────────────────
+    def fourier_sin1_weekly(dates):
+        return np.sin(2 * np.pi * 1 * dates.dayofweek / 7)
+
+    def fourier_cos1_weekly(dates):
+        return np.cos(2 * np.pi * 1 * dates.dayofweek / 7)
+
+    def fourier_sin2_weekly(dates):
+        return np.sin(2 * np.pi * 2 * dates.dayofweek / 7)
+
+    def fourier_cos2_weekly(dates):
+        return np.cos(2 * np.pi * 2 * dates.dayofweek / 7)
+
+    def fourier_sin1_annual(dates):
+        return np.sin(2 * np.pi * 1 * dates.dayofyear / 365.25)
+
+    def fourier_cos1_annual(dates):
+        return np.cos(2 * np.pi * 1 * dates.dayofyear / 365.25)
+
+    mlf = MLForecast(
+        models=[lgb.LGBMRegressor(**lgb_params)],
+        freq="D",
+        lags=[7, 14, 21, 28],
+        lag_transforms={
+            7: [
+                RollingMean(window_size=28),
+                RollingStd(window_size=28),
+                RollingMin(window_size=28),
+                RollingMax(window_size=28),
+                RollingQuantile(p=0.25, window_size=28),
+                RollingQuantile(p=0.75, window_size=28),
+                SeasonalRollingMean(season_length=7, window_size=4),
+                SeasonalRollingMean(season_length=7, window_size=8),
+            ],
+            14: [RollingMean(window_size=28)],
+        },
+        date_features=[
+            "month",
+            fourier_sin1_weekly, fourier_cos1_weekly,
+            fourier_sin2_weekly, fourier_cos2_weekly,
+            fourier_sin1_annual, fourier_cos1_annual,
+        ],
+    )
+
+    cv = mlf.cross_validation(
+        df=panel_cat,
+        h=HORIZON,
+        n_windows=N_WINDOWS,
+        step_size=STEP_SIZE,
+        refit=True,
+        prediction_intervals=PredictionIntervals(n_windows=N_WINDOWS, h=HORIZON),
+        level=[80],
+        static_features=STATIC_FEATURES,
+    )
+    log.info(f"  CV complete. Shape: {cv.shape}")
+
+    # Reshape wide → long
+    cv = cv.reset_index()
+    meta_cols  = ["unique_id", "ds", "cutoff", "y", "index"]
+    model_cols = [c for c in cv.columns
+                  if c not in meta_cols and not any(x in c for x in ["-lo-", "-hi-"])]
+
+    records = []
+    for model_name in model_cols:
+        lo_col = f"{model_name}-lo-80"
+        hi_col = f"{model_name}-hi-80"
+        chunk = cv[["unique_id", "ds", "cutoff", "y", model_name]].copy()
+        chunk = chunk.rename(columns={model_name: "y_hat"})
+        chunk["model"] = "LightGBM-Cat"
+        chunk["stage"] = "ml"
+        chunk["y_hat"] = chunk["y_hat"].fillna(0).clip(lower=0)
+        chunk["lo_80"] = cv[lo_col].fillna(0).clip(lower=0).values if lo_col in cv.columns else chunk["y_hat"]
+        chunk["hi_80"] = cv[hi_col].fillna(0).clip(lower=0).values if hi_col in cv.columns else chunk["y_hat"]
+        records.append(chunk)
+
+    forecasts_df = pd.concat(records, ignore_index=True)
+    forecasts_df = validate_forecast(forecasts_df, artifact_name="05_ml_cat_forecasts")
+    _save_parquet(forecasts_df, ARTIFACT_DIR / "05_ml_cat_forecasts.parquet",
+                  "05_ml_cat_forecasts")
+
+    log.info(f"  LightGBM-Cat complete: {len(forecasts_df):,} rows")
+    return forecasts_df
+
+
+# ---------------------------------------------------------------------------
 # Stage 4: Deep Learning — NHITS via NeuralForecast (SCAFFOLDED)
 # ---------------------------------------------------------------------------
 
@@ -646,6 +785,7 @@ STAGE_MAP = {
     "baselines": run_baselines,
     "ml":        run_ml,
     "ml_rich":   run_ml_rich,
+    "ml_cat":    run_ml_categorical,
     "dl":        run_dl,
 }
 
@@ -663,6 +803,7 @@ def main(stages: list[str]) -> None:
     baseline_scores_df = None
     ml_df              = None
     ml_rich_df         = None
+    ml_cat_df          = None
     dl_df              = None
 
     if "chronos" in stages:
@@ -686,12 +827,18 @@ def main(stages: list[str]) -> None:
     if "ml_rich" in stages:
         ml_rich_df = run_ml_rich(panel)
 
+    if "ml_cat" in stages:
+        ml_cat_df = run_ml_categorical(panel)
+
     if "dl" in stages:
         dl_df = run_dl(panel)
 
-    # Build final leaderboard artifacts if we have enough to work with
-    if all(x is not None for x in [baselines_df, baseline_scores_df, ml_df, dl_df]):
-        build_final_artifacts(baselines_df, baseline_scores_df, ml_df, dl_df)
+    # Build final leaderboard artifacts if we have enough to work with.
+    # Use ml_cat as the representative ML model in the final leaderboard if available,
+    # otherwise fall back to ml_rich, then ml.
+    best_ml_df = next((df for df in [ml_cat_df, ml_rich_df, ml_df] if df is not None), None)
+    if all(x is not None for x in [baselines_df, baseline_scores_df, best_ml_df, dl_df]):
+        build_final_artifacts(baselines_df, baseline_scores_df, best_ml_df, dl_df)
 
     log.info("\nOffline artifact build complete.")
     log.info("Run python -c \"from src.checkpointing import list_checkpoints; list_checkpoints()\" to verify.")
@@ -703,7 +850,7 @@ if __name__ == "__main__":
         "--stages",
         nargs="+",
         default=["all"],
-        choices=["all", "chronos", "baselines", "ml", "ml_rich", "dl"],
+        choices=["all", "chronos", "baselines", "ml", "ml_rich", "ml_cat", "dl"],
         help="Which stages to run. Default: all.",
     )
     args = parser.parse_args()

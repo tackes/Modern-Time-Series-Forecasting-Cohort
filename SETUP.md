@@ -2,39 +2,37 @@
 
 **Packt Live Workshop — Modern Time Series Forecasting with Python**
 
-This guide walks you through every step to get your environment ready before the workshop. Follow the path that matches your situation. If something looks different than described, check [TROUBLESHOOTING.md](TROUBLESHOOTING.md) or reach out before the session.
-
-**Start here at least 24 hours before the workshop.** Do not do this for the first time the morning of.
+This guide walks you through every step to get your environment ready before the workshop. If something looks different than described, check [TROUBLESHOOTING.md](TROUBLESHOOTING.md) or reach out before the session.
 
 ---
 
-## Step 0 — Which Path Should I Follow?
+## Which Path Should I Follow?
+
+**For the live cohort session: use Google Colab (Path A).** It requires no installation. Every attendee will be on the same environment. You only need a Google account.
+
+**Want a local VS Code setup on your own machine?** Follow Path B (Windows) or Path C (Mac/Linux) on your own time after the workshop. These give you a permanent environment you can reuse for your own projects — but they take 20–30 minutes to set up and are not required for the live session.
 
 | My situation | My path |
 |---|---|
-| I'm on Windows | [Path B: Windows Local (VS Code + Conda)](#path-b-windows-local-requires-anaconda-or-miniconda) ← recommended |
-| I'm on Mac or Linux | [Path C: Mac / Linux Local (VS Code)](#path-c-mac--linux-local) ← recommended |
-| I can't install software on my machine | [Path A: Google Colab](#path-a-google-colab-fallback-only) |
-
-**We recommend VS Code local (Path B or C) over Google Colab.** Once your environment is set up, VS Code is faster, more reliable, and closer to how real forecasting work is done. You open a notebook, pick your kernel once, and everything just works — no re-installing packages every session.
-
-**Use Colab (Path A) only if you cannot install software on your machine** — e.g., a locked-down work laptop. It works, but requires re-running a setup cell at the start of every session.
+| Live cohort session | [Path A: Google Colab](#path-a-google-colab-recommended-for-live-session) ← **do this** |
+| Setting up locally on Windows (own time) | [Path B: Windows Local (VS Code + Conda)](#path-b-windows-local-your-own-time) |
+| Setting up locally on Mac or Linux (own time) | [Path C: Mac / Linux Local (VS Code)](#path-c-mac--linux-local-your-own-time) |
 
 ---
 
-## Path A: Google Colab (Fallback Only)
+## Path A: Google Colab (Recommended for Live Session)
 
 Google Colab runs entirely in your browser. You do not need to install Python, Git, or anything else on your computer.
 
 **What you need:** A Google account (Gmail works).
 
-> **Important — Colab sessions are temporary.** When you close your browser or the session times out, Colab resets completely. All installed packages and cloned files are gone. You must run the setup cell (A.3) at the start of **every** new Colab session, including on workshop day. It takes about 5 minutes and is the same every time.
+> **Important — Colab sessions are temporary.** When you close your browser or the session times out, Colab resets completely. All installed packages and cloned files are gone. You must run the setup cell at the start of **every** new Colab session. It takes about 3–5 minutes and is the same every time. On workshop day, each notebook has its own setup cell — just run it and continue.
 
 ---
 
 ### A.1 — Open the Environment Check Notebook from GitHub
 
-Notebooks in Colab are opened directly from GitHub — not by cloning first and then navigating.
+Notebooks in Colab are opened directly from GitHub — not by downloading files first.
 
 1. Open your browser and go to **https://colab.research.google.com**
 2. Sign in with your Google account if prompted.
@@ -54,13 +52,26 @@ Notebooks in Colab are opened directly from GitHub — not by cloning first and 
 
 ### A.2 — Understand the Setup Cell
 
-The first code cell in every notebook is a setup cell. It clones the repository (which brings the data and precomputed artifacts) and installs all packages. It looks like this:
+The first code cell in every notebook is a setup cell. It clones the repository (which brings the data and precomputed artifacts) and installs any packages that notebook needs. It looks like this:
 
 ```python
-!git clone https://github.com/tackes/Modern-Time-Series-Forecasting-Cohort.git packt-modern-time-series
-%cd packt-modern-time-series
-!pip install -q torch --index-url https://download.pytorch.org/whl/cpu
-!pip install -q -r requirements.txt
+import os, sys
+
+REPO_URL  = "https://github.com/tackes/Modern-Time-Series-Forecasting-Cohort.git"
+REPO_PATH = "/content/packt-modern-time-series"
+
+if not os.path.exists(REPO_PATH):
+    os.system(f"git clone -q {REPO_URL} {REPO_PATH}")
+
+os.chdir(f"{REPO_PATH}/student_notebooks")
+
+if REPO_PATH not in sys.path:
+    sys.path.insert(0, REPO_PATH)
+
+# Some notebooks also install packages here, e.g.:
+# os.system("pip install -q lightgbm mlforecast")
+
+print(f"✓ Setup complete — {os.getcwd()}")
 ```
 
 **You must run this cell every time you open a notebook in a new Colab session.** The clone brings all the data and artifact files — you do not need to upload anything separately.
@@ -71,8 +82,8 @@ The first code cell in every notebook is a setup cell. It clones the repository 
 
 1. Click inside the first code cell of `00_env_check.ipynb`.
 2. Press **Shift + Enter** to run it.
-3. You will see a lot of text scroll by. This is normal and takes **3–5 minutes**.
-4. When it finishes, you will see `Successfully installed ...` near the bottom. There should be no red `ERROR` lines.
+3. You will see some text scroll by as the repo is cloned and packages install. This takes **3–5 minutes** the first time.
+4. When it finishes, you will see `✓ Setup complete` printed at the bottom. There should be no red `ERROR` lines.
 
 > **If you see a red error line** mentioning a package name and "failed to install", copy the full error text and check TROUBLESHOOTING.md.
 
@@ -83,7 +94,7 @@ The first code cell in every notebook is a setup cell. It clones the repository 
 1. Once the setup cell finishes, click **Runtime** in the top menu.
 2. Click **Run all**.
 3. Wait for all cells to finish (about 30–60 seconds).
-4. Scroll to the bottom of the notebook. You should see something like:
+4. Scroll to the bottom of the notebook. You should see:
 
 ```
 ✓ Python version OK
@@ -97,9 +108,26 @@ The first code cell in every notebook is a setup cell. It clones the repository 
 
 ---
 
-## Path B: Windows Local (Requires Anaconda or Miniconda)
+### A.5 — Workshop Day Workflow
 
-> **Important:** Windows requires the conda package manager. A plain `pip install` will not work and will cause crashes. If you do not have Anaconda or Miniconda, install one first (instructions in B.0).
+On workshop day, for each module:
+
+1. Go to **https://colab.research.google.com**
+2. Click **File → Open notebook → GitHub tab**
+3. Search `tackes/Modern-Time-Series-Forecasting-Cohort`
+4. Open the notebook for that module (e.g., `student_notebooks/03_eda_and_health.ipynb`)
+5. **Run the first cell** (the setup cell) — always, every time, before anything else
+6. Follow along with the instructor
+
+That's it. The setup cell handles everything automatically.
+
+---
+
+## Path B: Windows Local (Your Own Time)
+
+> Set this up on your own time after the workshop if you want a permanent local environment. **Not required for the live session.**
+
+> **Important:** Windows requires the conda package manager. A plain `pip install` will not work and will cause crashes. If you do not have Anaconda or Miniconda, install one first (B.0).
 
 ---
 
@@ -256,7 +284,9 @@ conda activate packt_timeseries_cohort
 
 ---
 
-## Path C: Mac / Linux Local
+## Path C: Mac / Linux Local (Your Own Time)
+
+> Set this up on your own time after the workshop if you want a permanent local environment. **Not required for the live session.**
 
 ---
 
@@ -335,20 +365,20 @@ Each command takes 2–5 minutes. Wait for each to finish before running the nex
 
 ---
 
-### C.6 — Run the Environment Check Notebook
+### C.6 — Open the Environment Check Notebook in VS Code
 
-From your terminal (with the virtual environment active):
-```bash
-jupyter notebook 00_env_check.ipynb
-```
+1. Open **VS Code** (if not installed, download it from https://code.visualstudio.com).
+2. Click **File → Open Folder** and select your `packt-modern-time-series` folder.
+3. In the left sidebar, click `00_env_check.ipynb`.
+4. In the top-right corner of the notebook, click the kernel selector.
+5. Look for **`packt_timeseries_cohort`** in the list and select it.
+6. Click **Run All** and scroll to the bottom. All five checks must show ✓.
 
-Your browser will open automatically to the notebook.
-
-- Click **Cell → Run All** in the menu bar.
-- Wait for all cells to finish.
-- Scroll to the bottom. All five checks must show ✓.
-
-> **If your browser doesn't open automatically**, look at the terminal output for a line like `http://localhost:8888/...` and paste that URL into your browser manually.
+> **Alternatively**, you can run from the terminal (with the virtual environment active):
+> ```bash
+> jupyter notebook 00_env_check.ipynb
+> ```
+> Your browser will open automatically. Click **Cell → Run All**.
 
 ---
 
@@ -363,21 +393,22 @@ If any of these are not true, see TROUBLESHOOTING.md or contact your instructor 
 
 ---
 
-## Quick Reference: How to Open a Terminal
+## Quick Reference
 
-| Platform | How to open |
-|---|---|
-| Windows (conda) | Start menu → search "Anaconda Prompt" → click it |
-| Mac | Command + Space → type "terminal" → Enter |
-| Linux | Ctrl + Alt + T |
-| Google Colab | Use the `!` prefix in a code cell to run shell commands |
+### How to Open a Notebook in Colab
 
-## Quick Reference: How to Activate Your Environment
+1. Go to **https://colab.research.google.com**
+2. Click **File → Open notebook**
+3. Click the **GitHub** tab
+4. Search `tackes/Modern-Time-Series-Forecasting-Cohort`
+5. Click the notebook you want
+
+### How to Activate Your Local Environment
 
 | Platform | Command |
 |---|---|
 | Windows (conda) | `conda activate packt_timeseries_cohort` |
 | Mac / Linux | `source packt_timeseries_cohort/bin/activate` |
-| Google Colab | Not needed — environment is per-session |
+| Google Colab | Not needed — run the setup cell at the top of each notebook |
 
-**Every time you open a new terminal before the workshop, re-activate your environment first.**
+**Every time you open a new terminal for local work, re-activate your environment first.**

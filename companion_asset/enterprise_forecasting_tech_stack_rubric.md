@@ -1,5 +1,5 @@
-# The Enterprise Forecasting Tech Stack Rubric
-## A Practitioner Evaluation Tool
+# Enterprise Forecasting System Maturity Rubric
+## A Practitioner Tool for Diagnosing Forecasting Infrastructure, Governance, and Operational Readiness
 
 **Authors:** Jeff Tackes & Manu Joseph  
 **Companion to:** *Modern Time Series Forecasting with Python* (Packt Publishing)
@@ -11,43 +11,71 @@ This rubric is a decision-support tool for evaluating forecasting infrastructure
 **How to use it:**  
 Score each dimension from 1 to 4 using the descriptors below. Total your score. Use the gap analysis at the end to identify where to invest next.
 
+The six dimensions follow the natural investment sequence:
+
+| # | Dimension | The question it answers |
+|---|---|---|
+| 1 | Metric Architecture & Evaluation Rigor | Are we measuring the right thing? |
+| 2 | Model Selection & Champion/Challenger Discipline | Are we choosing the right model? |
+| 3 | Data Contract & Feature Pipeline Architecture | Can we reproduce the inputs? |
+| 4 | Serving and Inference Architecture | Can we deliver forecasts reliably? |
+| 5 | Monitoring and Drift Detection | Can we detect failure? |
+| 6 | Organizational Fit and Ownership | Can the organization sustain it? |
+
 ---
 
-## Dimension 1: Model Selection Discipline
+## Dimension 1: Metric Architecture & Evaluation Rigor
 
-*Are you choosing models based on evidence, or habit?*
+*Are you measuring what matters — and measuring it correctly?*
 
 | Score | Descriptor |
 |---|---|
-| **1** | No formal evaluation. Models are chosen because "we've always used ARIMA" or because a vendor demo looked good. |
-| **2** | Some backtesting exists but uses a single holdout window, averages per-series, or does not match production cadence. |
-| **3** | Cross-validation with multiple windows. Pooled wMAPE. Baselines always included. Results documented and reproducible. |
-| **4** | Full evaluation pipeline: pooled point and interval metrics, coverage diagnostics, business-metric translation (safety stock, margin impact), and automated regression detection when models are retrained. |
+| **1** | RMSE or MAE only. No interval evaluation. No connection to business outcomes. Per-series averaging in use. |
+| **2** | wMAPE computed. Baselines included. But still averaging per-series, intervals are not evaluated, and there is no business metric translation. |
+| **3** | Pooled wMAPE and bias tracked. Interval Score and Coverage used correctly: coverage as a diagnostic, Interval Score for ranking. Business metric translation documented (e.g., "1 wMAPE point = X days of safety stock"). |
+| **4** | Full metric suite: pooled point and interval metrics, bias decomposed by segment, segment-level evaluation (by category, volatility tier, or business unit), and a documented threshold for what improvement is worth deploying. |
 
 **Your score:** ___
 
-**The gap that costs the most:** Averaging per-series wMAPE. It gives equal weight to a SKU selling 1 unit/day and one selling 10,000. Your evaluation is not reflecting where the money is.
+**The gap that costs the most:** Averaging per-series wMAPE. It gives equal weight to a SKU selling 1 unit/day and one selling 10,000. Your evaluation does not reflect where the money is. Pooling is not a technical detail — it is a business-alignment decision.
 
 ---
 
-## Dimension 2: Feature Pipeline Architecture
+## Dimension 2: Model Selection & Champion/Challenger Discipline
 
-*Can your features be trusted in production?*
+*Are you choosing models based on evidence, with a process you can repeat and defend?*
 
 | Score | Descriptor |
 |---|---|
-| **1** | Features computed ad hoc in notebooks. No versioning. Lag computation re-runs from scratch each inference cycle. |
-| **2** | Feature computation is scripted but runs inline with model training. No audit trail. Backfill strategy is manual. |
-| **3** | Feature store exists. Lags and rolling statistics are precomputed and versioned. Late-arriving data triggers targeted backfill jobs. |
-| **4** | Feature store with lineage tracking, data quality checks, and SLAs. Model training and inference consume features from the same versioned snapshot. Late data is detected, flagged, and handled automatically. |
+| **1** | No formal selection process. Models are chosen because "we've always used this" or because a vendor demo looked good. |
+| **2** | Some backtesting exists but uses a single holdout window, does not include baselines, and results are not documented or reproducible. |
+| **3** | Baselines always included. Multi-window cross-validation. Results documented and reproducible. A deployment threshold exists — the challenger must beat the champion by a defined margin before replacing it. |
+| **4** | Full champion/challenger process: every retraining cycle runs the challenger against the champion on held-out data. Model changes are version-controlled. Deployment decisions are documented with evidence. Regression detection is automated. |
 
 **Your score:** ___
 
-**The gap that costs the most:** No backfill strategy. When upstream data arrives late — a common occurrence in retail — your lag features silently become stale. The model trains on correct features but serves stale ones. The accuracy degradation is invisible until it shows up in business outcomes.
+**The gap that costs the most:** No deployment threshold. Without a clear standard for what improvement justifies a model change, every retrain is a judgment call. Judgment calls accumulate bias over time — usually toward complexity.
 
 ---
 
-## Dimension 3: Serving and Inference Architecture
+## Dimension 3: Data Contract & Feature Pipeline Architecture
+
+*Can your target definition, calendar, features, and data snapshots be trusted in production?*
+
+| Score | Descriptor |
+|---|---|
+| **1** | Target definition is informal. Features computed ad hoc in notebooks. No versioning. No handling of outliers, stockouts, or late-arriving data. |
+| **2** | Target and grain are documented. Feature computation is scripted but runs inline with training. Backfill is manual. No audit trail. |
+| **3** | Target definition is explicit and enforced: grain, date alignment, actuals finalization logic, and outlier handling are all specified. Governed feature pipeline with versioned snapshots. Late-arriving data triggers targeted backfill jobs. |
+| **4** | Full data contract: target, horizon, and actuals finalization are formally specified and validated before every training run. Feature lineage tracked. Data quality SLAs enforced. Training and inference consume features from the same versioned snapshot. |
+
+**Your score:** ___
+
+**The gap that costs the most:** An undefined target. Many forecasting failures happen before features are built — the wrong grain, misaligned dates, actuals that include returns or substitutions, or a horizon that does not match the business decision. A model trained on the wrong question answers the wrong question precisely.
+
+---
+
+## Dimension 4: Serving and Inference Architecture
 
 *Can you deliver forecasts reliably at the cadence your business requires?*
 
@@ -60,24 +88,7 @@ Score each dimension from 1 to 4 using the descriptors below. Total your score. 
 
 **Your score:** ___
 
-**The gap that costs the most:** No degraded-mode fallback. When your retraining job fails at 2am — and it will — your procurement team needs a forecast by 7am. Without a fallback, they get nothing, or they use a stale forecast without knowing it's stale.
-
----
-
-## Dimension 4: Evaluation Rigor
-
-*Are you measuring what matters for the business decision?*
-
-| Score | Descriptor |
-|---|---|
-| **1** | RMSE or MAE only. No interval evaluation. No connection to business outcomes. |
-| **2** | wMAPE computed. Baselines included. But intervals are not evaluated and per-series averaging may be in use. |
-| **3** | Pooled wMAPE and Interval Score. Coverage tracked as diagnostic. Business metric translation documented (e.g., "1 wMAPE point = X days of safety stock"). |
-| **4** | Full evaluation suite plus: automated champion/challenger testing on each retraining cycle, segment-level evaluation (by category, by volatility tier), and a documented threshold for when a model change is worth deploying. |
-
-**Your score:** ___
-
-**The gap that costs the most:** No interval evaluation. You are handing procurement teams a point forecast without telling them how much to trust it. Every purchasing decision they make based on that forecast carries hidden risk you have not quantified.
+**The gap that costs the most:** No degraded-mode fallback. When your retraining job fails at 2am — and it will — your procurement team needs a forecast by 7am. Without a fallback, they get nothing, or they use a stale forecast without knowing it is stale.
 
 ---
 
@@ -119,10 +130,10 @@ Score each dimension from 1 to 4 using the descriptors below. Total your score. 
 
 | Dimension | Your Score (1–4) |
 |---|---|
-| 1. Model Selection Discipline | ___ |
-| 2. Feature Pipeline Architecture | ___ |
-| 3. Serving and Inference Architecture | ___ |
-| 4. Evaluation Rigor | ___ |
+| 1. Metric Architecture & Evaluation Rigor | ___ |
+| 2. Model Selection & Champion/Challenger Discipline | ___ |
+| 3. Data Contract & Feature Pipeline Architecture | ___ |
+| 4. Serving and Inference Architecture | ___ |
 | 5. Monitoring and Drift Detection | ___ |
 | 6. Organizational Fit and Ownership | ___ |
 | **Total** | ___ / 24 |
@@ -142,17 +153,17 @@ Score each dimension from 1 to 4 using the descriptors below. Total your score. 
 
 ## Gap Analysis: Where to Invest Next
 
-**If your lowest score is Dimension 1 (Model Selection):**  
-Stop adding model complexity. Fix your evaluation first. A leaderboard built on flawed evaluation metrics will steer you toward the wrong model every time.
+**If your lowest score is Dimension 1 (Metric Architecture):**  
+Fix your measurement before anything else. A leaderboard built on flawed metrics will steer every downstream decision — model selection, retraining triggers, deployment thresholds — in the wrong direction.
 
-**If your lowest score is Dimension 2 (Feature Pipeline):**  
-Your ML models are running on foundations that will crack under production load. Invest in the feature store before scaling the model portfolio.
+**If your lowest score is Dimension 2 (Model Selection):**  
+Stop adding model complexity. You do not have a reliable process for knowing whether a new model is better than the one it replaces. Fix the selection discipline first.
 
-**If your lowest score is Dimension 3 (Serving):**  
+**If your lowest score is Dimension 3 (Data Contract & Features):**  
+Your models may be answering the wrong question or running on inputs that cannot be reproduced. Invest in a governed feature pipeline before scaling the model portfolio.
+
+**If your lowest score is Dimension 4 (Serving):**  
 You have a forecast system, not a forecast service. The difference matters when the business depends on it at 6am on a Monday.
-
-**If your lowest score is Dimension 4 (Evaluation Rigor):**  
-You are optimizing for a metric that is not connected to the business outcome you care about. Bridge the gap before the next model selection cycle.
 
 **If your lowest score is Dimension 5 (Monitoring):**  
 You will discover model degradation after it has already caused a business problem. Add monitoring before adding models.
@@ -164,12 +175,9 @@ Technical maturity without organizational ownership is a liability, not an asset
 
 ## A Note on Sequencing
 
-The dimensions are not independent. A score of 4 on Model Selection with a score of 1 on Monitoring means you built a precise instrument with no calibration check. A score of 4 on Feature Pipeline with a score of 1 on Serving means you built excellent inputs for a system that cannot deliver outputs reliably.
+The dimensions are numbered in the order they compound. A score of 4 on Model Selection with a score of 1 on Metric Architecture means you have an excellent process for choosing among models that are evaluated on the wrong metrics. A score of 4 on Feature Pipeline with a score of 1 on Serving means you built excellent inputs for a system that cannot deliver outputs reliably.
 
-**The right investment sequence:**  
-Evaluation Rigor → Feature Pipeline → Serving → Monitoring → Model Selection → Organizational Fit
-
-You cannot skip steps. Each dimension is the foundation for the one that follows.
+You can temporarily work around a weak dimension, but you cannot scale safely while ignoring it.
 
 ---
 
