@@ -243,6 +243,7 @@ def run_baselines(panel: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     from statsforecast import StatsForecast
     from statsforecast.models import Naive, SeasonalNaive, AutoETS
+    from statsforecast.utils import ConformalIntervals
 
     log.info("Running StatsForecast baselines (Naive, SeasonalNaive, AutoETS) ...")
     log.info(f"  Panel: {panel['unique_id'].nunique():,} series, {len(panel):,} rows")
@@ -258,6 +259,8 @@ def run_baselines(panel: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
         n_jobs=-1,
     )
 
+    conformal_intervals = ConformalIntervals(h=HORIZON, n_windows=N_WINDOWS)
+
     cv = sf.cross_validation(
         df=panel,
         h=HORIZON,
@@ -265,6 +268,7 @@ def run_baselines(panel: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
         step_size=STEP_SIZE,
         refit=REFIT,
         level=[80],
+        prediction_intervals=conformal_intervals,
     )
     log.info(f"  CV complete. Shape: {cv.shape}")
 
